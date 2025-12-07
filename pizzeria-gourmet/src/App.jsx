@@ -245,11 +245,9 @@ const useNavigation = () => {
       url.searchParams.delete('product');
     }
 
-    // PushState aggiunge una voce alla cronologia
     window.history.pushState({}, '', url);
     setRoute({ tab, productId });
     
-    // Scroll in alto solo se cambiamo tab principale, non se apriamo un prodotto (per preservare il contesto se torni indietro)
     if (!productId) {
       window.scrollTo(0, 0);
     }
@@ -427,7 +425,6 @@ const MenuCatalog = ({ productId, onProductSelect, onClearProduct }) => {
     ...MENU_DATA.bevande
   ], []);
 
-  // Se c'è un productId, troviamo quel prodotto specifico
   const selectedItem = useMemo(() => {
     return productId ? allItems.find(p => p.id === productId) : null;
   }, [productId, allItems]);
@@ -439,7 +436,6 @@ const MenuCatalog = ({ productId, onProductSelect, onClearProduct }) => {
     return allItems.filter(p => p.category === selectedCategory);
   }, [selectedCategory, allItems]);
 
-  // Se c'è un prodotto selezionato, mostriamo il dettaglio
   if (selectedItem) {
     return (
       <div className="py-12 bg-stone-50 min-h-screen">
@@ -732,7 +728,7 @@ const AdminPanel = ({ staffUser, onLogout }) => {
   const [users, setUsers] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [timeOffs, setTimeOffs] = useState([]);
-  const [newUser, setNewUser] = useState({ name: '', code: '', password: '', role: 'waiter' });
+  const [newUser, setNewUser] = useState({ name: '', code: '', password: '', role: 'cameriere' });
   const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', notes: '' });
   const [showNewResModal, setShowNewResModal] = useState(false);
   const [shiftFilterUser, setShiftFilterUser] = useState("all");
@@ -765,7 +761,7 @@ const AdminPanel = ({ staffUser, onLogout }) => {
   const handleCreateUser = async (e) => {
     e.preventDefault();
     if (staffUser.role !== 'manager') return;
-    try { await addDoc(collection(db, 'staff_users'), newUser); setNewUser({ name: '', code: '', password: '', role: 'waiter' }); alert("Utente creato!"); } catch (error) { console.error(error); }
+    try { await addDoc(collection(db, 'staff_users'), newUser); setNewUser({ name: '', code: '', password: '', role: 'cameriere' }); alert("Utente creato!"); } catch (error) { console.error(error); }
   };
   const handleDeleteUser = async (id) => { if (window.confirm("Eliminare utente?")) await deleteDoc(doc(db, 'staff_users', id)); };
   const updateResStatus = async (id, status) => { const now = new Date(); await updateDoc(doc(db, 'prenotazioni', id), { status, updatedAt: serverTimestamp(), updatedBy: staffUser.name, updatedAtTime: now.toISOString() }); };
@@ -830,7 +826,6 @@ const AdminPanel = ({ staffUser, onLogout }) => {
   
   const handleResetFerie = async () => {
     if (window.confirm("Attenzione: questo cancellerà TUTTE le richieste di ferie. Sei sicuro?")) {
-        // Since we can't delete collection directly from client, we delete docs one by one (for this small scale)
         const batch = [];
         timeOffs.forEach(t => deleteDoc(doc(db, 'ferie', t.id)));
         alert("Richieste ferie resettate.");
@@ -854,6 +849,14 @@ const AdminPanel = ({ staffUser, onLogout }) => {
       if (staffUser.role === 'manager') return timeOffs;
       return timeOffs.filter(t => t.userId === staffUser.id);
   }, [timeOffs, staffUser]);
+  
+  const roleLabels = {
+    waiter: 'Cameriere',
+    cameriere: 'Cameriere',
+    manager: 'Manager',
+    pizzaiolo: 'Pizzaiolo',
+    cuoco: 'Cuoco'
+  };
 
   return (
     <div className="bg-stone-100 min-h-screen">
@@ -934,8 +937,32 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                                 <button onClick={() => deleteReservation(res.id)} className="absolute top-1 right-1 text-stone-300 hover:text-red-500"><Trash2 size={12}/></button>
                                 <div className="font-bold text-sm">{res.name} <span className="font-normal text-xs text-stone-500">({res.guests}p)</span></div>
                                 <div className="text-xs text-stone-400">Tel: {res.phone}</div>
-                                {res.updatedBy && <div className="text-[10px] text-stone-400 mt-1">Conf: {res.updatedBy}</div>}
-                                <button onClick={() => updateResStatus(res.id, 'cancelled')} className="text-[10px] text-red-600 mt-1 underline">Annulla</button>
+                                {res.notes && <div className="text-xs bg-yellow-50 text-yellow-800 p-1 rounded mt-1 border border-yellow-100">{res.notes}</div>}
+                                
+                                {res.createdByStaff && (
+                                  <div className="mt-2 pt-2 border-t border-stone-100 text-[10px] text-stone-400 flex items-center">
+                                    <UserPlus size={10} className="mr-1"/> 
+                                    Creata da {res.createdByName} il {formatDate(res.createdByTime)}
+                                  </div>
+                                )}
+
+                                {res.updatedBy && res.status !== 'pending' && (
+                                  <div className="mt-1 text-[10px] text-stone-400 flex items-center">
+                                    <User size={10} className="mr-1"/> 
+                                    {res.status === 'confirmed' ? 'Confermata' : 'Cancellata'} da {res.updatedBy} il {formatDate(res.updatedAtTime || res.updatedAt)}
+                                  </div>
+                                )}
+                                
+                                <div className="mt-2 flex gap-2">
+                                  <div className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
+                                    res.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                                  }`}>
+                                    {res.status === 'confirmed' ? 'Confermato' : 'In Attesa'}
+                                  </div>
+                                  {res.status === 'pending' && (
+                                    <button onClick={() => updateResStatus(res.id, 'confirmed')} className="text-xs text-green-600 hover:underline">Conferma</button>
+                                  )}
+                                </div>
                              </div>
                            ))}
                         </div>
@@ -953,8 +980,32 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                                 <button onClick={() => deleteReservation(res.id)} className="absolute top-1 right-1 text-stone-300 hover:text-red-500"><Trash2 size={12}/></button>
                                 <div className="font-bold text-sm">{res.name} <span className="font-normal text-xs text-stone-500">({res.guests}p)</span></div>
                                 <div className="text-xs text-stone-400">Tel: {res.phone}</div>
-                                {res.updatedBy && <div className="text-[10px] text-stone-400 mt-1">Conf: {res.updatedBy}</div>}
-                                <button onClick={() => updateResStatus(res.id, 'cancelled')} className="text-[10px] text-red-600 mt-1 underline">Annulla</button>
+                                {res.notes && <div className="text-xs bg-yellow-50 text-yellow-800 p-1 rounded mt-1 border border-yellow-100">{res.notes}</div>}
+                                
+                                {res.createdByStaff && (
+                                  <div className="mt-2 pt-2 border-t border-stone-100 text-[10px] text-stone-400 flex items-center">
+                                    <UserPlus size={10} className="mr-1"/> 
+                                    Creata da {res.createdByName} il {formatDate(res.createdByTime)}
+                                  </div>
+                                )}
+
+                                {res.updatedBy && res.status !== 'pending' && (
+                                  <div className="mt-1 text-[10px] text-stone-400 flex items-center">
+                                    <User size={10} className="mr-1"/> 
+                                    {res.status === 'confirmed' ? 'Confermata' : 'Cancellata'} da {res.updatedBy} il {formatDate(res.updatedAtTime || res.updatedAt)}
+                                  </div>
+                                )}
+
+                                <div className="mt-2 flex gap-2">
+                                  <div className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
+                                    res.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                                  }`}>
+                                    {res.status === 'confirmed' ? 'Confermato' : 'In Attesa'}
+                                  </div>
+                                  {res.status === 'pending' && (
+                                    <button onClick={() => updateResStatus(res.id, 'confirmed')} className="text-xs text-green-600 hover:underline">Conferma</button>
+                                  )}
+                                </div>
                              </div>
                            ))}
                         </div>
@@ -1172,7 +1223,7 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                 <div className="md:col-span-1">
                   <label className="block text-xs font-bold text-stone-500 mb-1">Ruolo</label>
                   <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full border rounded px-3 py-2 text-sm bg-white">
-                    <option value="waiter">Cameriere</option>
+                    <option value="cameriere">Cameriere</option>
                     <option value="manager">Manager</option>
                     <option value="pizzaiolo">Pizzaiolo</option>
                     <option value="cuoco">Cuoco</option>
@@ -1198,7 +1249,7 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-stone-500 font-mono">{u.code}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full capitalize ${u.role === 'manager' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'}`}>
-                          {u.role}
+                          {roleLabels[u.role] || u.role}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -1216,173 +1267,6 @@ const AdminPanel = ({ staffUser, onLogout }) => {
     </div>
   );
 };
-
-// --- PRENOTAZIONE E CONTATTI ---
-const ReservationForm = ({ navigate }) => {
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '', date: '', time: '', guests: '2', notes: '' });
-  const [status, setStatus] = useState('idle');
-  const [availability, setAvailability] = useState({});
-
-  const next7Days = getNext7Days();
-  const maxDate = next7Days[6];
-
-  useEffect(() => {
-    if (!formData.date) return;
-    const q = query(collection(db, 'prenotazioni'), where('date', '==', formData.date));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const booked = {};
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.status !== 'cancelled') {
-          booked[data.time] = (booked[data.time] || 0) + parseInt(data.guests);
-        }
-      });
-      const nextAvailability = {};
-      [...TIME_SLOTS.lunch, ...TIME_SLOTS.dinner].forEach(slot => {
-        nextAvailability[slot] = Math.max(0, MAX_SEATS_PER_SLOT - (booked[slot] || 0));
-      });
-      setAvailability(nextAvailability);
-    });
-    return () => unsubscribe();
-  }, [formData.date]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!auth.currentUser) return;
-    const guests = parseInt(formData.guests);
-    const available = availability[formData.time] || 0;
-    if (guests > available) {
-      alert(`Siamo spiacenti, per l'orario selezionato sono rimasti solo ${available} posti.`);
-      return;
-    }
-    setStatus('loading');
-    try {
-      await addDoc(collection(db, 'prenotazioni'), {
-        ...formData,
-        userId: auth.currentUser.uid,
-        createdAt: serverTimestamp(),
-        status: 'pending'
-      });
-      setStatus('success');
-    } catch (err) { console.error(err); setStatus('error'); }
-  };
-
-  return (
-    <div className="py-16 bg-stone-100 min-h-screen">
-      <div className="max-w-3xl mx-auto px-4">
-        <div className="bg-white rounded-xl shadow-2xl overflow-hidden">
-          <div className="bg-stone-900 px-6 py-8 text-center text-white">
-            <h2 className="text-3xl font-serif font-bold">Prenota il tuo Tavolo</h2>
-            <p className="opacity-80 mt-2">Assicurati un posto per un'esperienza indimenticabile.</p>
-          </div>
-          <div className="p-8">
-            {status === 'success' ? (
-              <div className="text-center py-10">
-                <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
-                <h3 className="text-2xl font-bold text-stone-800">Richiesta Inviata!</h3>
-                <p className="text-stone-600">Riceverai una conferma via email.</p>
-                <button onClick={() => setStatus('idle')} className="mt-6 text-amber-600 font-bold underline">Nuova Prenotazione</button>
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="grid md:grid-cols-2 gap-6">
-                  <input required type="text" placeholder="Nome Completo" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
-                  <input required type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
-                </div>
-                <div className="grid md:grid-cols-2 gap-6">
-                  <input required type="tel" placeholder="Telefono" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
-                  <select value={formData.guests} onChange={e => setFormData({...formData, guests: e.target.value})} className="w-full px-4 py-3 border rounded bg-white focus:ring-2 focus:ring-amber-500 outline-none">
-                    {[...Array(10).keys()].map(i => <option key={i+1} value={i+1}>{i+1} Persone</option>)}
-                  </select>
-                </div>
-                <div className="grid md:grid-cols-2 gap-6">
-                  <input required type="date" min={new Date().toISOString().split('T')[0]} max={maxDate} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
-                  <select required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} className="w-full px-4 py-3 border rounded bg-white focus:ring-2 focus:ring-amber-500 outline-none">
-                    <option value="">Orario</option>
-                    {formData.date && (
-                      <>
-                        <optgroup label="Pranzo">{TIME_SLOTS.lunch.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
-                        <optgroup label="Cena">{TIME_SLOTS.dinner.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
-                      </>
-                    )}
-                  </select>
-                </div>
-                <button type="submit" disabled={status === 'loading'} className="w-full bg-amber-600 text-white font-bold py-4 rounded hover:bg-amber-700 transition-all shadow-lg">
-                  {status === 'loading' ? 'Invio...' : 'Conferma Prenotazione'}
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const Contacts = () => (
-  <div className="py-16 bg-white min-h-screen">
-    <div className="max-w-7xl mx-auto px-4">
-      <div className="text-center mb-16">
-        <h2 className="text-3xl md:text-4xl font-serif font-bold text-stone-800 mb-4">Dove Siamo</h2>
-        <div className="h-1 w-24 bg-amber-500 mx-auto"></div>
-      </div>
-      <div className="grid md:grid-cols-2 gap-12">
-        <div className="space-y-8">
-          <div className="bg-stone-50 p-8 rounded-xl border border-stone-200">
-            <h3 className="text-2xl font-serif font-bold text-stone-800 mb-6 flex items-center"><MapPin className="text-amber-500 mr-2" /> Daniele Gourmet</h3>
-            <p className="text-stone-600 mb-2">Lungomare Trieste, 98</p>
-            <p className="text-stone-600 mb-6">84122, Salerno (SA)</p>
-            <div className="flex items-center text-stone-600 mb-2"><Phone size={18} className="mr-3 text-amber-500"/> 089 123 4567</div>
-            <div className="flex items-center text-stone-600"><Mail size={18} className="mr-3 text-amber-500"/> info@danielegourmet.it</div>
-          </div>
-          <div className="bg-stone-50 p-8 rounded-xl border border-stone-200">
-            <h3 className="text-2xl font-serif font-bold text-stone-800 mb-6 flex items-center"><Clock className="text-amber-500 mr-2" /> Orari</h3>
-            <p className="mb-2"><strong>Lun - Ven:</strong> 12:30 - 15:00 | 19:00 - 23:30</p>
-            <p><strong>Sab - Dom:</strong> 19:00 - 00:30</p>
-          </div>
-        </div>
-        <div className="h-[400px] bg-stone-200 rounded-xl overflow-hidden shadow-lg">
-          <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3023.777678536124!2d14.7667893!3d40.6749987!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x133bc3cf7a8d56b5%3A0x6296720d2769222!2sDaniele%20Gourmet!5e0!3m2!1sit!2sit!4v1700000000000!5m2!1sit!2sit" width="100%" height="100%" style={{border:0}} allowFullScreen="" loading="lazy"></iframe>
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-const Story = () => (
-  <div className="py-16 bg-stone-50 min-h-screen">
-    <div className="max-w-4xl mx-auto px-4">
-      <div className="text-center mb-16">
-        <h2 className="text-3xl font-serif font-bold text-stone-800 mb-4">La Nostra Storia</h2>
-        <div className="h-1 w-24 bg-amber-500 mx-auto"></div>
-      </div>
-      <div className="bg-white p-8 md:p-12 rounded-xl shadow-lg border border-stone-100">
-        <p className="text-lg text-stone-600 leading-relaxed mb-6">
-          La storia di <strong>Daniele Gourmet</strong> inizia molto prima dell'apertura del nostro locale sul Lungomare di Salerno. Inizia nelle cucine di famiglia, tra il profumo del ragù e la farina che imbiancava i grembiuli delle nonne.
-        </p>
-        <p className="text-lg text-stone-600 leading-relaxed mb-6">
-          Il nostro chef, Giuseppe Maglione, ha voluto portare questa eredità nel futuro. Non più solo "pizza", ma un disco di pasta lievitato lentamente, leggero come una nuvola, che diventa la tela per ingredienti d'eccellenza: dal Pomodoro San Marzano DOP alla Mozzarella di Bufala, fino alle eccellenze Slow Food.
-        </p>
-        <blockquote className="border-l-4 border-amber-500 pl-6 italic text-xl text-stone-800 my-10 font-serif">
-          "L'innovazione non è altro che la tradizione che ha saputo evolversi per incontrare il gusto contemporaneo."
-        </blockquote>
-        <div className="grid grid-cols-2 gap-4 mt-12">
-          <div className="col-span-2 h-64 overflow-hidden rounded-lg">
-             <img src="https://images.unsplash.com/photo-1684183164475-fd45179b47aa?q=80&w=1740&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D" alt="Lungomare Salerno" className="w-full h-full object-cover" />
-          </div>
-          <div className="h-64 overflow-hidden rounded-lg">
-             <img src="https://images.unsplash.com/photo-1542834369-f10ebf06d3e0?w=800&q=80" alt="Il nostro forno" className="w-full h-full object-cover" />
-          </div>
-          <div className="h-64 overflow-hidden rounded-lg">
-             <img src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80" alt="Sala" className="w-full h-full object-cover" />
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-// --- MAIN APP ---
 
 export default function App() {
   const { route, navigate } = useNavigation();
@@ -1440,4 +1324,4 @@ export default function App() {
        )}
     </div>
   );
-}//ultimo aggiornmento 07-12-2025 14:00
+}//aggiornamento 07-12-2025 16:40
