@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, where, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, where, getDocs, writeBatch } from 'firebase/firestore';
 import { 
   Utensils, MapPin, Phone, Clock, Calendar, Users, ChefHat, 
   Instagram, Facebook, Menu as MenuIcon, X, CheckCircle, 
   Star, Mail, ClipboardList, Lock, LogIn, Check, Ban, Send, Trash2,
-  ArrowLeft, Info, Leaf, Wheat, Milk, Wine, Coffee, UserPlus, ShieldAlert, History, User, PlusCircle, CalendarDays, Moon, Sun
+  ArrowLeft, Info, Leaf, Wheat, Milk, Wine, Coffee, UserPlus, ShieldAlert, History, User, PlusCircle, CalendarDays, Moon, Sun, Briefcase, Plane, LogOut, RefreshCw
 } from 'lucide-react';
 
 // --- CONFIGURAZIONE FIREBASE ---
@@ -33,6 +33,12 @@ const TIME_SLOTS = {
 // --- UTILS ---
 const formatDate = (timestamp) => {
   if (!timestamp) return '';
+  if (typeof timestamp === 'string') {
+      const date = new Date(timestamp);
+      return new Intl.DateTimeFormat('it-IT', { 
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
+      }).format(date);
+  }
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
   return new Intl.DateTimeFormat('it-IT', { 
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
@@ -54,7 +60,7 @@ const getDayName = (dateStr) => {
   return new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'short' }).format(date);
 };
 
-// --- DATI MENU (LE TUE IMMAGINI) ---
+// --- DATI MENU ---
 const MENU_DATA = {
   antipasti: [
     {
@@ -206,7 +212,7 @@ const MENU_DATA = {
   ]
 };
 
-// --- NAVIGATION HOOK (CORRETTO) ---
+// --- NAVIGATION HOOK ---
 const useNavigation = () => {
   const getRouteFromUrl = () => {
     // Check if window is defined (SSR safety)
@@ -266,7 +272,6 @@ const Navbar = ({ activeTab, navigate, isLoggedIn }) => {
   ];
 
   const handleNavClick = (id) => {
-    // Quando clicchi sul menu, resetti sempre il prodotto selezionato
     navigate(id, null); 
     setIsOpen(false);
   };
@@ -513,7 +518,7 @@ const StaffLogin = ({ onLoginSuccess }) => {
 
     // MASTER LOGIN
     if (code === 'admin' && password === 'admin') {
-      onLoginSuccess({ name: 'Master Admin', role: 'manager', isMaster: true });
+      onLoginSuccess({ id: 'master', name: 'Master Admin', role: 'manager', isMaster: true });
       setLoading(false);
       return;
     }
@@ -645,8 +650,8 @@ const StaffReservationForm = ({ staffUser, onClose }) => {
         updatedBy: staffUser.name,
         createdByStaff: staffUser.name,
         createdByName: staffUser.name,
-        createdByTime: now.toISOString(), // CORRETTO QUI
-        updatedAtTime: now.toISOString() // Aggiunto per coerenza
+        createdByTime: now.toISOString(),
+        updatedAtTime: now.toISOString() 
       });
       setStatus('success');
       setTimeout(onClose, 1500);
@@ -725,289 +730,430 @@ const AdminPanel = ({ staffUser, onLogout }) => {
   const [resFilter, setResFilter] = useState('pending'); 
   const [reservations, setReservations] = useState([]);
   const [users, setUsers] = useState([]);
+  const [shifts, setShifts] = useState([]);
+  const [timeOffs, setTimeOffs] = useState([]);
   const [newUser, setNewUser] = useState({ name: '', code: '', password: '', role: 'waiter' });
+  const [newTimeOff, setNewTimeOff] = useState({ startDate: '', endDate: '', notes: '' });
   const [showNewResModal, setShowNewResModal] = useState(false);
+  const [shiftFilterUser, setShiftFilterUser] = useState("all");
   
-  // Weekly View State
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const weekDays = getNext7Days();
 
-  // Load Reservations
+  // Load Data
   useEffect(() => {
-    const q = query(collection(db, 'prenotazioni'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setReservations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const unsubRes = onSnapshot(query(collection(db, 'prenotazioni'), orderBy('createdAt', 'desc')), (snap) => {
+      setReservations(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    return () => unsubscribe();
+    
+    const unsubUsers = onSnapshot(query(collection(db, 'staff_users')), (snap) => {
+      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubShifts = onSnapshot(query(collection(db, 'turni')), (snap) => {
+      setShifts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubTimeOff = onSnapshot(query(collection(db, 'ferie'), orderBy('startDate')), (snap) => {
+      setTimeOffs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubRes(); unsubUsers(); unsubShifts(); unsubTimeOff(); };
   }, []);
 
-  // Load Users (Only Manager)
-  useEffect(() => {
-    if (staffUser.role !== 'manager') return;
-    const q = query(collection(db, 'staff_users'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
-    return () => unsubscribe();
-  }, [staffUser]);
-
+  // --- Handlers for Users & Reservations ---
   const handleCreateUser = async (e) => {
     e.preventDefault();
     if (staffUser.role !== 'manager') return;
+    try { await addDoc(collection(db, 'staff_users'), newUser); setNewUser({ name: '', code: '', password: '', role: 'waiter' }); alert("Utente creato!"); } catch (error) { console.error(error); }
+  };
+  const handleDeleteUser = async (id) => { if (window.confirm("Eliminare utente?")) await deleteDoc(doc(db, 'staff_users', id)); };
+  const updateResStatus = async (id, status) => { const now = new Date(); await updateDoc(doc(db, 'prenotazioni', id), { status, updatedAt: serverTimestamp(), updatedBy: staffUser.name, updatedAtTime: now.toISOString() }); };
+  const deleteReservation = async (id) => { if (window.confirm("Eliminare prenotazione?")) await deleteDoc(doc(db, 'prenotazioni', id)); };
+
+  // --- Handlers for Shifts ---
+  const handleShiftChange = async (userId, date, shiftType) => {
+    if (staffUser.role !== 'manager') return;
+    
+    // CHECK TIMEOFF CONFLICTS
+    const userTimeOffs = timeOffs.filter(t => t.userId === userId && t.status === 'approved');
+    const shiftDate = new Date(date);
+    const hasConflict = userTimeOffs.some(t => {
+        const start = new Date(t.startDate);
+        const end = new Date(t.endDate);
+        return shiftDate >= start && shiftDate <= end;
+    });
+
+    if (hasConflict) {
+        alert("Impossibile assegnare turno: il dipendente è in ferie approvate in questa data.");
+        return;
+    }
+
+    const existing = shifts.find(s => s.userId === userId && s.date === date);
+    if (existing) {
+      if (shiftType === '') await deleteDoc(doc(db, 'turni', existing.id)); 
+      else await updateDoc(doc(db, 'turni', existing.id), { shiftType });
+    } else if (shiftType !== '') {
+      const user = users.find(u => u.id === userId);
+      await addDoc(collection(db, 'turni'), { userId, userName: user.name, date, shiftType });
+    }
+  };
+
+  // --- Handlers for Time Off ---
+  const handleTimeOffRequest = async (e) => {
+    e.preventDefault();
+    if (new Date(newTimeOff.startDate) > new Date(newTimeOff.endDate)) {
+        alert("La data di inizio non può essere successiva alla data di fine!");
+        return;
+    }
     try {
-      await addDoc(collection(db, 'staff_users'), newUser);
-      setNewUser({ name: '', code: '', password: '', role: 'waiter' });
-      alert("Utente creato con successo!");
-    } catch (error) {
-      console.error("Error adding user: ", error);
-      alert("Errore nella creazione");
+      await addDoc(collection(db, 'ferie'), {
+        ...newTimeOff,
+        userId: staffUser.id,
+        userName: staffUser.name,
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+      setNewTimeOff({ startDate: '', endDate: '', notes: '' });
+      alert("Richiesta inviata!");
+    } catch (err) { console.error(err); }
+  };
+
+  const updateTimeOffStatus = async (id, status) => {
+    if (staffUser.role !== 'manager') return;
+    await updateDoc(doc(db, 'ferie', id), { status });
+  };
+  
+  const deleteTimeOffRequest = async (id) => {
+    if (window.confirm("Eliminare questa richiesta di ferie?")) await deleteDoc(doc(db, 'ferie', id));
+  };
+  
+  const handleResetFerie = async () => {
+    if (window.confirm("Attenzione: questo cancellerà TUTTE le richieste di ferie. Sei sicuro?")) {
+        // Since we can't delete collection directly from client, we delete docs one by one (for this small scale)
+        const batch = [];
+        timeOffs.forEach(t => deleteDoc(doc(db, 'ferie', t.id)));
+        alert("Richieste ferie resettate.");
     }
   };
 
-  const handleDeleteUser = async (id) => {
-    if (window.confirm("Sei sicuro di voler eliminare definitivamente questo utente?")) {
-      await deleteDoc(doc(db, 'staff_users', id));
-    }
-  };
+  // --- Derived State ---
+  const dailyReservations = reservations.filter(r => r.date === selectedDate && r.status !== 'cancelled');
+  const groupedReservations = { lunch: {}, dinner: {} };
+  TIME_SLOTS.lunch.forEach(t => groupedReservations.lunch[t] = dailyReservations.filter(r => r.time === t));
+  TIME_SLOTS.dinner.forEach(t => groupedReservations.dinner[t] = dailyReservations.filter(r => r.time === t));
 
-  const updateResStatus = async (id, status) => {
-    const now = new Date();
-    await updateDoc(doc(db, 'prenotazioni', id), { 
-      status,
-      updatedAt: serverTimestamp(),
-      updatedBy: staffUser.name,
-      updatedAtTime: now.toISOString()
-    });
-  };
+  // Filtered Users for Shifts View
+  const shiftsUsers = useMemo(() => {
+     if (staffUser.role === 'manager') return shiftFilterUser === 'all' ? users : users.filter(u => u.id === shiftFilterUser);
+     return users.filter(u => u.id === staffUser.id);
+  }, [users, staffUser, shiftFilterUser]);
 
-  const deleteReservation = async (id) => {
-    if (window.confirm("Sei sicuro di voler eliminare questa prenotazione? L'azione è irreversibile.")) {
-      await deleteDoc(doc(db, 'prenotazioni', id));
-    }
-  };
-
-  // Filter reservations by selected date
-  const dailyReservations = useMemo(() => {
-    return reservations.filter(r => r.date === selectedDate && r.status !== 'cancelled');
-  }, [reservations, selectedDate]);
-
-  // Group by slot
-  const groupedReservations = useMemo(() => {
-    const grouped = { lunch: {}, dinner: {} };
-    
-    TIME_SLOTS.lunch.forEach(time => {
-      grouped.lunch[time] = dailyReservations.filter(r => r.time === time);
-    });
-    
-    TIME_SLOTS.dinner.forEach(time => {
-      grouped.dinner[time] = dailyReservations.filter(r => r.time === time);
-    });
-    
-    return grouped;
-  }, [dailyReservations]);
+  // Filtered TimeOffs
+  const visibleTimeOffs = useMemo(() => {
+      if (staffUser.role === 'manager') return timeOffs;
+      return timeOffs.filter(t => t.userId === staffUser.id);
+  }, [timeOffs, staffUser]);
 
   return (
     <div className="bg-stone-100 min-h-screen">
-      {/* Admin Header */}
+      {/* Header */}
       <div className="bg-white border-b border-stone-200 px-4 py-4 sticky top-0 z-40 shadow-sm">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
             <div className="bg-amber-100 p-2 rounded-full"><ChefHat className="text-amber-600 w-6 h-6" /></div>
             <div>
               <h2 className="font-bold text-stone-800 text-lg">Portale Staff</h2>
-              <p className="text-xs text-stone-500">Operatore: {staffUser.name} ({staffUser.role === 'manager' ? 'Manager' : 'Cameriere'})</p>
+              <p className="text-xs text-stone-500">{staffUser.name} ({staffUser.role})</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setShowNewResModal(true)}
-              className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-bold flex items-center shadow-sm"
-            >
-              <PlusCircle size={16} className="mr-2"/> Nuova Prenotazione
-            </button>
-            <div className="flex bg-stone-100 rounded p-1">
-              <button 
-                onClick={() => setActiveView('reservations')}
-                className={`px-4 py-1 rounded text-sm font-medium transition-all ${activeView === 'reservations' ? 'bg-white shadow text-stone-800' : 'text-stone-500'}`}
-              >
-                Agenda
-              </button>
+          <div className="flex items-center gap-4 overflow-x-auto w-full md:w-auto">
+             <div className="flex bg-stone-100 rounded p-1">
+              <button onClick={() => setActiveView('reservations')} className={`px-3 py-1 rounded text-sm font-medium ${activeView === 'reservations' ? 'bg-white shadow' : 'text-stone-500'}`}>Agenda</button>
+              <button onClick={() => setActiveView('shifts')} className={`px-3 py-1 rounded text-sm font-medium ${activeView === 'shifts' ? 'bg-white shadow' : 'text-stone-500'}`}>Turni</button>
+              <button onClick={() => setActiveView('timeoff')} className={`px-3 py-1 rounded text-sm font-medium ${activeView === 'timeoff' ? 'bg-white shadow' : 'text-stone-500'}`}>Ferie</button>
               {staffUser.role === 'manager' && (
-                <button 
-                  onClick={() => setActiveView('users')}
-                  className={`px-4 py-1 rounded text-sm font-medium transition-all ${activeView === 'users' ? 'bg-white shadow text-stone-800' : 'text-stone-500'}`}
-                >
-                  Utenti
-                </button>
+                <button onClick={() => setActiveView('users')} className={`px-3 py-1 rounded text-sm font-medium ${activeView === 'users' ? 'bg-white shadow' : 'text-stone-500'}`}>Utenti</button>
               )}
             </div>
-            <button onClick={onLogout} className="text-red-600 hover:bg-red-50 px-3 py-1 rounded text-sm font-bold border border-red-200">
-              Esci
-            </button>
+            <button onClick={onLogout} className="text-red-600 px-3 py-1 text-sm font-bold border border-red-200 rounded flex items-center gap-1"><LogOut size={14}/> Esci</button>
           </div>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-4 py-8">
         
+        {/* VIEW: AGENDA */}
         {activeView === 'reservations' && (
           <>
-            {/* Date Tabs */}
-            <div className="flex space-x-2 mb-8 border-b border-stone-300 pb-2 overflow-x-auto">
-              {weekDays.map((dateStr) => (
-                <button
-                  key={dateStr}
-                  onClick={() => setSelectedDate(dateStr)}
-                  className={`px-4 py-3 rounded-t-lg font-bold text-sm transition-colors flex flex-col items-center min-w-[100px] ${
-                    selectedDate === dateStr 
-                    ? 'bg-stone-800 text-white border-b-4 border-amber-500'
-                    : 'bg-white text-stone-500 hover:bg-stone-200'
-                  }`}
-                >
-                  <span className="text-xs opacity-70 uppercase tracking-wider">{getDayName(dateStr).split(' ')[0]}</span>
-                  <span className="text-lg">{dateStr.split('-')[2]}</span>
-                </button>
-              ))}
+            <div className="flex justify-between items-center mb-6">
+               <div className="flex space-x-2 border-b border-stone-300 pb-2 overflow-x-auto w-full">
+                {['pending', 'confirmed', 'cancelled'].map((status) => (
+                  <button key={status} onClick={() => setResFilter(status)} className={`px-4 py-2 rounded-t-lg font-bold text-sm uppercase tracking-wider ${resFilter === status ? `text-white ${status === 'pending' ? 'bg-amber-500' : status === 'confirmed' ? 'bg-green-600' : 'bg-red-600'}` : 'bg-white text-stone-500'}`}>
+                    {status === 'pending' ? 'In Attesa' : status === 'confirmed' ? 'Confermate' : 'Cancellate'}
+                  </button>
+                ))}
+              </div>
+               <button onClick={() => setShowNewResModal(true)} className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded text-sm font-bold flex items-center shadow-sm ml-4 whitespace-nowrap"><PlusCircle size={16} className="mr-2"/> Nuova</button>
             </div>
 
-            {/* Service Sections */}
-            <div className="space-y-8">
-              
-              {/* PRANZO */}
-              <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
-                <div className="bg-orange-50 border-b border-orange-100 px-6 py-3 flex items-center">
-                  <Sun className="text-orange-500 mr-2" size={20}/>
-                  <h3 className="font-serif font-bold text-orange-800 text-lg">Servizio Pranzo</h3>
-                </div>
-                <div className="p-6 grid md:grid-cols-2 gap-6">
-                  {TIME_SLOTS.lunch.map(time => (
-                    <div key={time} className="border border-stone-100 rounded-lg p-4 bg-stone-50/50">
-                      <div className="flex justify-between items-center mb-3 pb-2 border-b border-stone-200">
-                        <span className="font-bold text-lg text-stone-700">{time}</span>
-                        <span className="bg-stone-200 text-stone-600 text-xs px-2 py-1 rounded font-mono">
-                          {groupedReservations.lunch[time].reduce((acc, curr) => acc + parseInt(curr.guests), 0)} / 10 Posti
-                        </span>
-                      </div>
-                      {groupedReservations.lunch[time].length === 0 ? (
-                        <p className="text-sm text-stone-400 italic">Nessuna prenotazione.</p>
-                      ) : (
-                        <div className="space-y-3">
-                          {groupedReservations.lunch[time].map(res => (
-                            <div key={res.id} className="bg-white p-3 rounded border border-stone-200 shadow-sm relative group">
-                              <button onClick={() => deleteReservation(res.id)} className="absolute top-2 right-2 text-stone-300 hover:text-red-500"><Trash2 size={14}/></button>
-                              <div className="font-bold text-stone-800">{res.name}</div>
-                              <div className="text-sm text-stone-500 flex items-center gap-3">
-                                <span className="flex items-center"><Users size={12} className="mr-1"/> {res.guests}</span>
-                                <span className="flex items-center"><Phone size={12} className="mr-1"/> {res.phone}</span>
-                              </div>
-                              {res.notes && <div className="text-xs bg-yellow-50 text-yellow-800 p-1 rounded mt-1 border border-yellow-100">{res.notes}</div>}
-                              
-                              {/* Staff Creation Info */}
-                              {res.createdByStaff && (
-                                <div className="mt-2 pt-2 border-t border-stone-100 text-[10px] text-stone-400 flex items-center">
-                                  <UserPlus size={10} className="mr-1"/> 
-                                  Creata da {res.createdByName} il {formatDate(res.createdByTime)}
-                                </div>
-                              )}
-
-                              {/* Update Info */}
-                              {res.updatedBy && res.status !== 'pending' && (
-                                <div className="mt-1 text-[10px] text-stone-400 flex items-center">
-                                  <User size={10} className="mr-1"/> 
-                                  {res.status === 'confirmed' ? 'Confermata' : 'Cancellata'} da {res.updatedBy} il {formatDate(res.updatedAtTime || res.updatedAt)}
-                                </div>
-                              )}
-                              
-                              <div className="mt-2 flex gap-2">
-                                <div className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
-                                  res.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                                }`}>
-                                  {res.status === 'confirmed' ? 'Confermato' : 'In Attesa'}
-                                </div>
-                                {res.status === 'pending' && (
-                                  <button onClick={() => updateResStatus(res.id, 'confirmed')} className="text-xs text-green-600 hover:underline">Conferma</button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+            {resFilter === 'pending' || resFilter === 'cancelled' ? (
+               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                 {reservations.filter(r => r.status === resFilter).map(res => (
+                   <div key={res.id} className="bg-white p-4 rounded shadow border-l-4 border-amber-500 relative">
+                     <button onClick={() => deleteReservation(res.id)} className="absolute top-2 right-2 text-stone-300 hover:text-red-600"><Trash2 size={18}/></button>
+                     <div className="font-bold">{res.name}</div>
+                     <p className="text-sm text-stone-600"><Calendar size={14} className="inline mr-1"/> {res.date} <Clock size={14} className="inline ml-2 mr-1"/> {res.time}</p>
+                     <p className="text-sm text-stone-600"><Users size={14} className="inline mr-1"/> {res.guests}p</p>
+                     <div className="flex gap-2 mt-2 pt-2 border-t border-stone-100">
+                        {res.status === 'pending' && <><button onClick={() => updateResStatus(res.id, 'confirmed')} className="flex-1 bg-green-50 text-green-700 py-1 rounded font-bold text-xs">Conferma</button><button onClick={() => updateResStatus(res.id, 'cancelled')} className="flex-1 bg-red-50 text-red-700 py-1 rounded font-bold text-xs">Rifiuta</button></>}
+                        {res.status === 'cancelled' && <button onClick={() => updateResStatus(res.id, 'pending')} className="flex-1 bg-amber-50 text-amber-600 py-1 rounded font-bold text-xs">Ripristina</button>}
+                     </div>
+                   </div>
+                 ))}
+               </div>
+            ) : (
+              <>
+                <div className="flex space-x-2 mb-8 border-b border-stone-300 pb-2 overflow-x-auto">
+                  {weekDays.map((dateStr) => (
+                    <button key={dateStr} onClick={() => setSelectedDate(dateStr)} className={`px-4 py-3 rounded-t-lg font-bold text-sm flex flex-col items-center min-w-[100px] ${selectedDate === dateStr ? 'bg-stone-800 text-white border-b-4 border-amber-500' : 'bg-white text-stone-500'}`}>
+                      <span className="text-xs opacity-70 uppercase">{getDayName(dateStr).split(' ')[0]}</span>
+                      <span className="text-lg">{dateStr.split('-')[2]}</span>
+                    </button>
                   ))}
                 </div>
-              </div>
-
-              {/* CENA */}
-              <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
-                <div className="bg-indigo-50 border-b border-indigo-100 px-6 py-3 flex items-center">
-                  <Moon className="text-indigo-500 mr-2" size={20}/>
-                  <h3 className="font-serif font-bold text-indigo-800 text-lg">Servizio Cena</h3>
-                </div>
-                <div className="p-6 grid md:grid-cols-3 gap-6">
-                  {TIME_SLOTS.dinner.map(time => (
-                    <div key={time} className="border border-stone-100 rounded-lg p-4 bg-stone-50/50">
-                      <div className="flex justify-between items-center mb-3 pb-2 border-b border-stone-200">
-                        <span className="font-bold text-lg text-stone-700">{time}</span>
-                        <span className="bg-stone-200 text-stone-600 text-xs px-2 py-1 rounded font-mono">
-                          {groupedReservations.dinner[time].reduce((acc, curr) => acc + parseInt(curr.guests), 0)} / 10 Posti
-                        </span>
-                      </div>
-                      {groupedReservations.dinner[time].length === 0 ? (
-                        <p className="text-sm text-stone-400 italic">Nessuna prenotazione.</p>
-                      ) : (
-                        <div className="space-y-3">
-                          {groupedReservations.dinner[time].map(res => (
-                            <div key={res.id} className="bg-white p-3 rounded border border-stone-200 shadow-sm relative group">
-                              <button onClick={() => deleteReservation(res.id)} className="absolute top-2 right-2 text-stone-300 hover:text-red-500"><Trash2 size={14}/></button>
-                              <div className="font-bold text-stone-800">{res.name}</div>
-                              <div className="text-sm text-stone-500 flex items-center gap-3">
-                                <span className="flex items-center"><Users size={12} className="mr-1"/> {res.guests}</span>
-                                <span className="flex items-center"><Phone size={12} className="mr-1"/> {res.phone}</span>
-                              </div>
-                              {res.notes && <div className="text-xs bg-yellow-50 text-yellow-800 p-1 rounded mt-1 border border-yellow-100">{res.notes}</div>}
-                              
-                              {/* Staff Creation Info */}
-                              {res.createdByStaff && (
-                                <div className="mt-2 pt-2 border-t border-stone-100 text-[10px] text-stone-400 flex items-center">
-                                  <UserPlus size={10} className="mr-1"/> 
-                                  Creata da {res.createdByName} il {formatDate(res.createdByTime)}
-                                </div>
-                              )}
-
-                              {/* Update Info */}
-                              {res.updatedBy && res.status !== 'pending' && (
-                                <div className="mt-1 text-[10px] text-stone-400 flex items-center">
-                                  <User size={10} className="mr-1"/> 
-                                  {res.status === 'confirmed' ? 'Confermata' : 'Cancellata'} da {res.updatedBy} il {formatDate(res.updatedAtTime || res.updatedAt)}
-                                </div>
-                              )}
-
-                              <div className="mt-2 flex gap-2">
-                                <div className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${
-                                  res.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                                }`}>
-                                  {res.status === 'confirmed' ? 'Confermato' : 'In Attesa'}
-                                </div>
-                                {res.status === 'pending' && (
-                                  <button onClick={() => updateResStatus(res.id, 'confirmed')} className="text-xs text-green-600 hover:underline">Conferma</button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+                <div className="space-y-8">
+                  <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+                    <div className="bg-orange-50 px-6 py-3 flex items-center font-bold text-orange-800"><Sun className="mr-2" size={20}/> Pranzo</div>
+                    <div className="p-6 grid md:grid-cols-2 gap-6">
+                      {TIME_SLOTS.lunch.map(time => (
+                        <div key={time} className="border border-stone-100 rounded p-3 bg-stone-50/50">
+                           <div className="font-bold text-stone-700 mb-2 border-b pb-1">{time} <span className="float-right text-xs bg-stone-200 px-2 rounded">{groupedReservations.lunch[time].reduce((a,c)=>a+parseInt(c.guests),0)}/10</span></div>
+                           {groupedReservations.lunch[time].map(res => (
+                             <div key={res.id} className="bg-white p-2 rounded border mb-2 shadow-sm relative">
+                                <button onClick={() => deleteReservation(res.id)} className="absolute top-1 right-1 text-stone-300 hover:text-red-500"><Trash2 size={12}/></button>
+                                <div className="font-bold text-sm">{res.name} <span className="font-normal text-xs text-stone-500">({res.guests}p)</span></div>
+                                <div className="text-xs text-stone-400">Tel: {res.phone}</div>
+                                {res.updatedBy && <div className="text-[10px] text-stone-400 mt-1">Conf: {res.updatedBy}</div>}
+                                <button onClick={() => updateResStatus(res.id, 'cancelled')} className="text-[10px] text-red-600 mt-1 underline">Annulla</button>
+                             </div>
+                           ))}
                         </div>
-                      )}
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                  <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+                    <div className="bg-indigo-50 px-6 py-3 flex items-center font-bold text-indigo-800"><Moon className="mr-2" size={20}/> Cena</div>
+                    <div className="p-6 grid md:grid-cols-3 gap-6">
+                      {TIME_SLOTS.dinner.map(time => (
+                        <div key={time} className="border border-stone-100 rounded p-3 bg-stone-50/50">
+                           <div className="font-bold text-stone-700 mb-2 border-b pb-1">{time} <span className="float-right text-xs bg-stone-200 px-2 rounded">{groupedReservations.dinner[time].reduce((a,c)=>a+parseInt(c.guests),0)}/10</span></div>
+                           {groupedReservations.dinner[time].map(res => (
+                             <div key={res.id} className="bg-white p-2 rounded border mb-2 shadow-sm relative">
+                                <button onClick={() => deleteReservation(res.id)} className="absolute top-1 right-1 text-stone-300 hover:text-red-500"><Trash2 size={12}/></button>
+                                <div className="font-bold text-sm">{res.name} <span className="font-normal text-xs text-stone-500">({res.guests}p)</span></div>
+                                <div className="text-xs text-stone-400">Tel: {res.phone}</div>
+                                {res.updatedBy && <div className="text-[10px] text-stone-400 mt-1">Conf: {res.updatedBy}</div>}
+                                <button onClick={() => updateResStatus(res.id, 'cancelled')} className="text-[10px] text-red-600 mt-1 underline">Annulla</button>
+                             </div>
+                           ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-
-            </div>
+              </>
+            )}
           </>
         )}
 
+        {/* VIEW: SHIFTS */}
+        {activeView === 'shifts' && (
+          <div className="space-y-6">
+            {staffUser.role === 'manager' && (
+               <div className="flex items-center justify-end mb-4">
+                  <span className="text-sm font-bold text-stone-500 mr-2">Filtra dipendente:</span>
+                  <select 
+                    value={shiftFilterUser} 
+                    onChange={e => setShiftFilterUser(e.target.value)}
+                    className="border rounded px-3 py-1 text-sm"
+                  >
+                    <option value="all">Tutti</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+               </div>
+            )}
+            
+            {/* MANAGER VIEW: TABLE */}
+            {staffUser.role === 'manager' ? (
+                <div className="bg-white rounded-lg shadow overflow-x-auto">
+                    <table className="min-w-full divide-y divide-stone-200">
+                    <thead className="bg-stone-50">
+                        <tr>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-stone-500 uppercase">Dipendente</th>
+                        {weekDays.map(d => (
+                            <th key={d} className="px-4 py-3 text-center text-xs font-bold text-stone-500 uppercase min-w-[100px]">
+                            {getDayName(d).split(' ')[0]} <br/> {d.split('-')[2]}
+                            </th>
+                        ))}
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-stone-200">
+                        {shiftsUsers.map(user => (
+                        <tr key={user.id}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-stone-900">{user.name}</td>
+                            {weekDays.map(date => {
+                            const shift = shifts.find(s => s.userId === user.id && s.date === date);
+                            
+                            // CHECK IF TIMEOFF APPROVED FOR THIS DATE
+                            const isTimeOff = timeOffs.some(t => 
+                                t.userId === user.id && 
+                                t.status === 'approved' && 
+                                new Date(date) >= new Date(t.startDate) && 
+                                new Date(date) <= new Date(t.endDate)
+                            );
+
+                            const isMyShift = shift ? shift.shiftType : '';
+                            return (
+                                <td key={date} className={`px-2 py-4 text-center ${isTimeOff ? 'bg-red-50' : ''}`}>
+                                    {isTimeOff ? (
+                                        <div className="flex justify-center text-red-400" title="In Ferie">
+                                            <Plane size={16} />
+                                        </div>
+                                    ) : (
+                                        <select 
+                                            value={isMyShift} 
+                                            onChange={(e) => handleShiftChange(user.id, date, e.target.value)}
+                                            className={`text-xs border rounded p-1 w-full font-medium ${isMyShift === 'Pranzo' ? 'bg-orange-100 text-orange-800' : isMyShift === 'Cena' ? 'bg-indigo-100 text-indigo-800' : isMyShift === 'Doppio' ? 'bg-purple-100 text-purple-800' : 'bg-white'}`}
+                                        >
+                                            <option value="">-</option>
+                                            <option value="Pranzo">Pranzo</option>
+                                            <option value="Cena">Cena</option>
+                                            <option value="Doppio">Doppio</option>
+                                        </select>
+                                    )}
+                                </td>
+                            );
+                            })}
+                        </tr>
+                        ))}
+                    </tbody>
+                    </table>
+                </div>
+            ) : (
+                // WAITER VIEW: CARDS
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {weekDays.map(date => {
+                        const shift = shifts.find(s => s.userId === staffUser.id && s.date === date);
+                        const shiftType = shift ? shift.shiftType : null;
+                        
+                        // CHECK IF TIMEOFF
+                        const isTimeOff = timeOffs.some(t => 
+                            t.userId === staffUser.id && 
+                            t.status === 'approved' && 
+                            new Date(date) >= new Date(t.startDate) && 
+                            new Date(date) <= new Date(t.endDate)
+                        );
+
+                        return (
+                            <div key={date} className={`p-6 rounded-xl border shadow-sm flex flex-col items-center justify-center text-center transition-all ${
+                                isTimeOff ? 'bg-red-50 border-red-200' :
+                                shiftType === 'Pranzo' ? 'bg-orange-50 border-orange-200' : 
+                                shiftType === 'Cena' ? 'bg-indigo-50 border-indigo-200' : 
+                                shiftType === 'Doppio' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-100'
+                            }`}>
+                                <div className="text-sm uppercase font-bold text-gray-400 mb-1">{getDayName(date)}</div>
+                                <div className="text-2xl font-bold text-gray-800 mb-3">{date.split('-')[2]}</div>
+                                {isTimeOff ? (
+                                    <span className="px-3 py-1 rounded-full text-sm font-bold bg-red-100 text-red-600 flex items-center gap-1">
+                                        <Plane size={12}/> Ferie
+                                    </span>
+                                ) : shiftType ? (
+                                    <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+                                        shiftType === 'Pranzo' ? 'bg-orange-200 text-orange-800' : 
+                                        shiftType === 'Cena' ? 'bg-indigo-200 text-indigo-800' : 'bg-purple-200 text-purple-800'
+                                    }`}>
+                                        {shiftType}
+                                    </span>
+                                ) : (
+                                    <span className="text-gray-400 italic text-sm">Riposo</span>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+          </div>
+        )}
+
+        {/* VIEW: TIMEOFF */}
+        {activeView === 'timeoff' && (
+          <div className="grid md:grid-cols-3 gap-8">
+            <div className="md:col-span-1 bg-white p-6 rounded-lg shadow h-fit border border-stone-200">
+              <h3 className="font-bold text-lg mb-4 flex items-center"><Plane className="mr-2 text-amber-600"/> Richiedi Ferie</h3>
+              <form onSubmit={handleTimeOffRequest} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 mb-1">Da</label>
+                  <input type="date" required value={newTimeOff.startDate} onChange={e => setNewTimeOff({...newTimeOff, startDate: e.target.value})} className="w-full border rounded px-3 py-2 text-sm"/>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 mb-1">A</label>
+                  <input type="date" required value={newTimeOff.endDate} onChange={e => setNewTimeOff({...newTimeOff, endDate: e.target.value})} className="w-full border rounded px-3 py-2 text-sm"/>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 mb-1">Motivazione</label>
+                  <textarea value={newTimeOff.notes} onChange={e => setNewTimeOff({...newTimeOff, notes: e.target.value})} className="w-full border rounded px-3 py-2 text-sm h-20" placeholder="Es. Visita medica"/>
+                </div>
+                <button type="submit" className="w-full bg-stone-800 text-white font-bold py-2 rounded text-sm hover:bg-black transition-colors">Invia Richiesta</button>
+              </form>
+              {staffUser.role === 'manager' && (
+                <button onClick={handleResetFerie} className="w-full mt-4 border border-red-200 text-red-600 font-bold py-2 rounded text-xs hover:bg-red-50 flex items-center justify-center gap-1">
+                    <RefreshCw size={12}/> Reset DB Ferie
+                </button>
+              )}
+            </div>
+            
+            <div className="md:col-span-2 space-y-4">
+              <h3 className="font-bold text-lg">Stato Richieste</h3>
+              {visibleTimeOffs.length === 0 && <p className="text-stone-400 italic">Nessuna richiesta presente.</p>}
+              {visibleTimeOffs.map(req => (
+                <div key={req.id} className={`bg-white p-4 rounded shadow border-l-4 ${req.status === 'approved' ? 'border-green-500' : req.status === 'rejected' ? 'border-red-500' : 'border-amber-500'} flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 relative group`}>
+                  
+                  {/* Delete Button: Now visible also for processed requests if user is owner or manager */}
+                  {(staffUser.role === 'manager' || req.userId === staffUser.id) && (
+                    <button onClick={() => deleteTimeOffRequest(req.id)} className="absolute top-2 right-2 text-stone-300 hover:text-red-500" title="Elimina"><Trash2 size={16}/></button>
+                  )}
+
+                  <div>
+                    <div className="font-bold text-stone-800 flex items-center gap-2">
+                        {req.userName} 
+                        {staffUser.role === 'manager' && <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-500 font-normal">ID: {req.userId.slice(0,4)}</span>}
+                    </div>
+                    <div className="text-sm text-stone-600 flex items-center mt-1">
+                        <Calendar size={14} className="mr-1"/> Dal {req.startDate} al {req.endDate}
+                    </div>
+                    {req.notes && <div className="text-xs text-stone-500 mt-2 bg-stone-50 p-2 rounded border border-stone-100 italic">"{req.notes}"</div>}
+                  </div>
+                  <div className="flex items-center gap-4 self-end sm:self-center">
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${req.status === 'approved' ? 'bg-green-100 text-green-700' : req.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {req.status === 'pending' ? 'In Attesa' : req.status === 'approved' ? 'Approvata' : 'Rifiutata'}
+                    </span>
+                    {staffUser.role === 'manager' && req.status === 'pending' && (
+                      <div className="flex gap-2">
+                        <button onClick={() => updateTimeOffStatus(req.id, 'approved')} className="bg-green-50 text-green-600 p-1.5 rounded hover:bg-green-100 border border-green-200" title="Approva"><CheckCircle size={18}/></button>
+                        <button onClick={() => updateTimeOffStatus(req.id, 'rejected')} className="bg-red-50 text-red-600 p-1.5 rounded hover:bg-red-100 border border-red-200" title="Rifiuta"><Ban size={18}/></button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: USERS (MANAGER ONLY) */}
         {activeView === 'users' && staffUser.role === 'manager' && (
-          <div className="space-y-8">
-            {/* Create User Form */}
+           <div className="space-y-8">
             <div className="bg-white p-6 rounded-lg shadow-md border border-stone-200">
               <h3 className="text-lg font-bold mb-4 flex items-center"><UserPlus className="mr-2 text-amber-600"/> Aggiungi Dipendente</h3>
               <form onSubmit={handleCreateUser} className="grid md:grid-cols-5 gap-4 items-end">
@@ -1028,13 +1174,13 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                   <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full border rounded px-3 py-2 text-sm bg-white">
                     <option value="waiter">Cameriere</option>
                     <option value="manager">Manager</option>
+                    <option value="pizzaiolo">Pizzaiolo</option>
+                    <option value="cuoco">Cuoco</option>
                   </select>
                 </div>
                 <button type="submit" className="bg-stone-800 text-white font-bold py-2 rounded hover:bg-black transition-colors text-sm">Crea Utente</button>
               </form>
             </div>
-
-            {/* Users List */}
             <div className="bg-white rounded-lg shadow overflow-hidden">
               <table className="min-w-full divide-y divide-stone-200">
                 <thead className="bg-stone-50">
@@ -1051,8 +1197,8 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-stone-900">{u.name}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-stone-500 font-mono">{u.code}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${u.role === 'manager' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'}`}>
-                          {u.role === 'manager' ? 'Manager' : 'Cameriere'}
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full capitalize ${u.role === 'manager' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'}`}>
+                          {u.role}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -1060,31 +1206,23 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                       </td>
                     </tr>
                   ))}
-                  {users.length === 0 && (
-                    <tr><td colSpan="4" className="px-6 py-4 text-center text-sm text-stone-500">Nessun utente trovato nel database.</td></tr>
-                  )}
                 </tbody>
               </table>
             </div>
           </div>
         )}
       </div>
-      
-      {showNewResModal && (
-        <StaffReservationForm staffUser={staffUser} onClose={() => setShowNewResModal(false)} />
-      )}
+      {showNewResModal && <StaffReservationForm staffUser={staffUser} onClose={() => setShowNewResModal(false)} />}
     </div>
   );
 };
 
 // --- PRENOTAZIONE E CONTATTI ---
-
 const ReservationForm = ({ navigate }) => {
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', date: '', time: '', guests: '2', notes: '' });
   const [status, setStatus] = useState('idle');
   const [availability, setAvailability] = useState({});
 
-  // Calcolo data max (7 giorni da oggi)
   const next7Days = getNext7Days();
   const maxDate = next7Days[6];
 
@@ -1111,15 +1249,12 @@ const ReservationForm = ({ navigate }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!auth.currentUser) return;
-
     const guests = parseInt(formData.guests);
     const available = availability[formData.time] || 0;
-
     if (guests > available) {
       alert(`Siamo spiacenti, per l'orario selezionato sono rimasti solo ${available} posti.`);
       return;
     }
-
     setStatus('loading');
     try {
       await addDoc(collection(db, 'prenotazioni'), {
@@ -1129,10 +1264,7 @@ const ReservationForm = ({ navigate }) => {
         status: 'pending'
       });
       setStatus('success');
-    } catch (err) {
-      console.error(err);
-      setStatus('error');
-    }
+    } catch (err) { console.error(err); setStatus('error'); }
   };
 
   return (
@@ -1164,33 +1296,13 @@ const ReservationForm = ({ navigate }) => {
                   </select>
                 </div>
                 <div className="grid md:grid-cols-2 gap-6">
-                  <input 
-                    required 
-                    type="date" 
-                    min={new Date().toISOString().split('T')[0]}
-                    max={maxDate}
-                    value={formData.date} 
-                    onChange={e => setFormData({...formData, date: e.target.value})} 
-                    className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" 
-                  />
+                  <input required type="date" min={new Date().toISOString().split('T')[0]} max={maxDate} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
                   <select required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} className="w-full px-4 py-3 border rounded bg-white focus:ring-2 focus:ring-amber-500 outline-none">
                     <option value="">Orario</option>
                     {formData.date && (
                       <>
-                        <optgroup label="Pranzo">
-                          {TIME_SLOTS.lunch.map(t => (
-                            <option key={t} value={t} disabled={availability[t] <= 0}>
-                              {t} ({availability[t] ?? 10} posti)
-                            </option>
-                          ))}
-                        </optgroup>
-                        <optgroup label="Cena">
-                          {TIME_SLOTS.dinner.map(t => (
-                            <option key={t} value={t} disabled={availability[t] <= 0}>
-                              {t} ({availability[t] ?? 10} posti)
-                            </option>
-                          ))}
-                        </optgroup>
+                        <optgroup label="Pranzo">{TIME_SLOTS.lunch.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
+                        <optgroup label="Cena">{TIME_SLOTS.dinner.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
                       </>
                     )}
                   </select>
@@ -1328,4 +1440,4 @@ export default function App() {
        )}
     </div>
   );
-}//ultimo aggiornamento 06/2024 15:13
+}//ultimo aggiornmento 07-12-2025 14:00
