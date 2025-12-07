@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, where, getDocs, writeBatch } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, where, getDocs } from 'firebase/firestore';
 import { 
   Utensils, MapPin, Phone, Clock, Calendar, Users, ChefHat, 
   Instagram, Facebook, Menu as MenuIcon, X, CheckCircle, 
-  Star, Mail, ClipboardList, Lock, LogIn, Check, Ban, Send, Trash2,
-  ArrowLeft, Info, Leaf, Wheat, Milk, Wine, Coffee, UserPlus, ShieldAlert, History, User, PlusCircle, CalendarDays, Moon, Sun, Briefcase, Plane, LogOut, RefreshCw
+  Star, Mail, Lock, LogOut, Trash2, ArrowLeft, Info, Leaf, Wheat, Milk, Wine, Coffee, UserPlus, ShieldAlert, User, PlusCircle, Moon, Sun, Plane, RefreshCw
 } from 'lucide-react';
 
 // --- CONFIGURAZIONE FIREBASE ---
@@ -39,6 +38,7 @@ const formatDate = (timestamp) => {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
       }).format(date);
   }
+  // Gestione Timestamp di Firestore
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
   return new Intl.DateTimeFormat('it-IT', { 
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
@@ -70,14 +70,14 @@ const MENU_DATA = {
       description: "L'autentico crocchè di patate con provola, salame Napoli e fonduta di parmigiano.",
       ingredients: "Patate, Provola, Salame, Parmigiano Reggiano",
       allergens: ["Latte", "Glutine", "Uova"],
-      image: "https://images.unsplash.com/photo-1683694062041-cc62c5390b13?q=80&w=774&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
+      image: "https://images.unsplash.com/photo-1683694062041-cc62c5390b13?q=80&w=774&auto=format&fit=crop",
       category: "Antipasti"
     },
     {
       id: "a2",
       name: "Frittatina alla Parmigiana",
       price: 6.00,
-      description: "La tradizione napoletana incontra la parmigiana di melanzane. Cuore filante e panatura croccante.",
+      description: "La tradizione napoletana incontra la parmigiana di melanzane.",
       ingredients: "Bucatini, Besciamella, Melanzane, Provola, Basilico",
       allergens: ["Latte", "Glutine"],
       image: "https://blog.giallozafferano.it/ammorecucinaemandolino/wp-content/uploads/2020/12/81E54AF9-8F6E-4F9C-BB89-F4FEF4BF2AA3-750x500.jpeg",
@@ -121,7 +121,7 @@ const MENU_DATA = {
       id: "p3",
       name: "La Montanara",
       price: 10.00,
-      description: "Pizza fritta e ripassata al forno, una doppia consistenza unica.",
+      description: "Pizza fritta e ripassata al forno.",
       ingredients: "Pomodoro pelato, Fiordilatte, Cacioricotta, Basilico",
       allergens: ["Latte", "Glutine"],
       image: "https://media-cdn.tripadvisor.com/media/photo-s/14/f1/85/81/montanara-fritta-ripassata.jpg",
@@ -167,10 +167,10 @@ const MENU_DATA = {
       id: "d1",
       name: "Innamorarsi sul Vesuvio",
       price: 6.00,
-      description: "Spicchio di impasto al cacao con crema al burro e frutti di bosco.",
+      description: "Spicchio di impasto al cacao con crema al burro.",
       ingredients: "Cacao, Burro, Frutti di bosco, Confettura",
       allergens: ["Latte", "Glutine"],
-      image: "https://images.unsplash.com/photo-1563729784474-d77dbb933a9e?w=800&q=80", // Torta cioccolato
+      image: "https://images.unsplash.com/photo-1563729784474-d77dbb933a9e?w=800&q=80",
       category: "Dolci"
     },
     {
@@ -215,9 +215,7 @@ const MENU_DATA = {
 // --- NAVIGATION HOOK ---
 const useNavigation = () => {
   const getRouteFromUrl = () => {
-    // Check if window is defined (SSR safety)
     if (typeof window === 'undefined') return { tab: 'home', productId: null };
-    
     const params = new URLSearchParams(window.location.search);
     return {
       tab: params.get('tab') || 'home',
@@ -238,13 +236,11 @@ const useNavigation = () => {
   const navigate = (tab, productId = null) => {
     const url = new URL(window.location);
     url.searchParams.set('tab', tab);
-    
     if (productId) {
       url.searchParams.set('product', productId);
     } else {
       url.searchParams.delete('product');
     }
-
     window.history.pushState({}, '', url);
     setRoute({ tab, productId });
     
@@ -252,7 +248,6 @@ const useNavigation = () => {
       window.scrollTo(0, 0);
     }
   };
-
   return { route, navigate };
 };
 
@@ -328,6 +323,7 @@ const Navbar = ({ activeTab, navigate, isLoggedIn }) => {
   );
 };
 
+// Hero receives 'navigate' prop
 const Hero = ({ navigate }) => (
   <div className="relative h-[600px] flex items-center justify-center bg-stone-900 overflow-hidden">
     <div className="absolute inset-0 opacity-40">
@@ -347,12 +343,45 @@ const Hero = ({ navigate }) => (
         Sapori autentici, impasti a lunga lievitazione e ingredienti di prima scelta. Un'esperienza unica a Salerno.
       </p>
       <div className="flex flex-col sm:flex-row justify-center gap-4">
-        <button onClick={() => navigate('prenota')} className="px-8 py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-sm uppercase tracking-widest transition-all transform hover:scale-105 shadow-lg">
+        <button onClick={() => navigate('prenota', null)} className="px-8 py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-sm uppercase tracking-widest transition-all transform hover:scale-105 shadow-lg">
           Prenota un Tavolo
         </button>
-        <button onClick={() => navigate('menu')} className="px-8 py-4 bg-transparent border-2 border-stone-400 hover:border-amber-500 hover:text-amber-500 text-stone-300 font-bold rounded-sm uppercase tracking-widest transition-all">
+        <button onClick={() => navigate('menu', null)} className="px-8 py-4 bg-transparent border-2 border-stone-400 hover:border-amber-500 hover:text-amber-500 text-stone-300 font-bold rounded-sm uppercase tracking-widest transition-all">
           Sfoglia il Menu
         </button>
+      </div>
+    </div>
+  </div>
+);
+
+const Story = () => (
+  <div className="py-16 bg-stone-50 min-h-screen">
+    <div className="max-w-4xl mx-auto px-4">
+      <div className="text-center mb-16">
+        <h2 className="text-3xl font-serif font-bold text-stone-800 mb-4">La Nostra Storia</h2>
+        <div className="h-1 w-24 bg-amber-500 mx-auto"></div>
+      </div>
+      <div className="bg-white p-8 md:p-12 rounded-xl shadow-lg border border-stone-100">
+        <p className="text-lg text-stone-600 leading-relaxed mb-6">
+          La storia di <strong>Daniele Gourmet</strong> inizia molto prima dell'apertura del nostro locale sul Lungomare di Salerno. Inizia nelle cucine di famiglia, tra il profumo del ragù e la farina che imbiancava i grembiuli delle nonne.
+        </p>
+        <p className="text-lg text-stone-600 leading-relaxed mb-6">
+          Il nostro chef, Giuseppe Maglione, ha voluto portare questa eredità nel futuro. Non più solo "pizza", ma un disco di pasta lievitato lentamente, leggero come una nuvola, che diventa la tela per ingredienti d'eccellenza: dal Pomodoro San Marzano DOP alla Mozzarella di Bufala, fino alle eccellenze Slow Food.
+        </p>
+        <blockquote className="border-l-4 border-amber-500 pl-6 italic text-xl text-stone-800 my-10 font-serif">
+          "L'innovazione non è altro che la tradizione che ha saputo evolversi per incontrare il gusto contemporaneo."
+        </blockquote>
+        <div className="grid grid-cols-2 gap-4 mt-12">
+          <div className="col-span-2 h-64 overflow-hidden rounded-lg">
+             <img src="https://images.unsplash.com/photo-1684183164475-fd45179b47aa?q=80&w=1740&auto=format&fit=crop" alt="Lungomare Salerno" className="w-full h-full object-cover" />
+          </div>
+          <div className="h-64 overflow-hidden rounded-lg">
+             <img src="https://images.unsplash.com/photo-1542834369-f10ebf06d3e0?w=800&q=80" alt="Il nostro forno" className="w-full h-full object-cover" />
+          </div>
+          <div className="h-64 overflow-hidden rounded-lg">
+             <img src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80" alt="Sala" className="w-full h-full object-cover" />
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1249,7 +1278,8 @@ const AdminPanel = ({ staffUser, onLogout }) => {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-stone-500 font-mono">{u.code}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full capitalize ${u.role === 'manager' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'}`}>
-                          {roleLabels[u.role] || u.role}
+                          {/* Mappa per visualizzare correttamente anche i vecchi ruoli */}
+                          {u.role === 'waiter' ? 'Cameriere' : u.role}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -1267,6 +1297,140 @@ const AdminPanel = ({ staffUser, onLogout }) => {
     </div>
   );
 };
+
+// --- PRENOTAZIONE E CONTATTI ---
+const ReservationForm = ({ navigate }) => { // Correctly accepts navigate prop
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', date: '', time: '', guests: '2', notes: '' });
+  const [status, setStatus] = useState('idle');
+  const [availability, setAvailability] = useState({});
+
+  const next7Days = getNext7Days();
+  const maxDate = next7Days[6];
+
+  useEffect(() => {
+    if (!formData.date) return;
+    const q = query(collection(db, 'prenotazioni'), where('date', '==', formData.date));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const booked = {};
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.status !== 'cancelled') {
+          booked[data.time] = (booked[data.time] || 0) + parseInt(data.guests);
+        }
+      });
+      const nextAvailability = {};
+      [...TIME_SLOTS.lunch, ...TIME_SLOTS.dinner].forEach(slot => {
+        nextAvailability[slot] = Math.max(0, MAX_SEATS_PER_SLOT - (booked[slot] || 0));
+      });
+      setAvailability(nextAvailability);
+    });
+    return () => unsubscribe();
+  }, [formData.date]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!auth.currentUser) return; // Basic check
+    const guests = parseInt(formData.guests);
+    const available = availability[formData.time] || 0;
+    if (guests > available) {
+      alert(`Siamo spiacenti, per l'orario selezionato sono rimasti solo ${available} posti.`);
+      return;
+    }
+    setStatus('loading');
+    try {
+      await addDoc(collection(db, 'prenotazioni'), {
+        ...formData,
+        userId: auth.currentUser.uid,
+        createdAt: serverTimestamp(),
+        status: 'pending'
+      });
+      setStatus('success');
+    } catch (err) { console.error(err); setStatus('error'); }
+  };
+
+  return (
+    <div className="py-16 bg-stone-100 min-h-screen">
+      <div className="max-w-3xl mx-auto px-4">
+        <div className="bg-white rounded-xl shadow-2xl overflow-hidden">
+          <div className="bg-stone-900 px-6 py-8 text-center text-white">
+            <h2 className="text-3xl font-serif font-bold">Prenota il tuo Tavolo</h2>
+            <p className="opacity-80 mt-2">Assicurati un posto per un'esperienza indimenticabile.</p>
+          </div>
+          <div className="p-8">
+            {status === 'success' ? (
+              <div className="text-center py-10">
+                <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
+                <h3 className="text-2xl font-bold text-stone-800">Richiesta Inviata!</h3>
+                <p className="text-stone-600">Riceverai una conferma via email.</p>
+                <button onClick={() => setStatus('idle')} className="mt-6 text-amber-600 font-bold underline">Nuova Prenotazione</button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="grid md:grid-cols-2 gap-6">
+                  <input required type="text" placeholder="Nome Completo" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
+                  <input required type="email" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
+                </div>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <input required type="tel" placeholder="Telefono" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
+                  <select value={formData.guests} onChange={e => setFormData({...formData, guests: e.target.value})} className="w-full px-4 py-3 border rounded bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+                    {[...Array(10).keys()].map(i => <option key={i+1} value={i+1}>{i+1} Persone</option>)}
+                  </select>
+                </div>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <input required type="date" min={new Date().toISOString().split('T')[0]} max={maxDate} value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-3 border rounded focus:ring-2 focus:ring-amber-500 outline-none" />
+                  <select required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} className="w-full px-4 py-3 border rounded bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+                    <option value="">Orario</option>
+                    {formData.date && (
+                      <>
+                        <optgroup label="Pranzo">{TIME_SLOTS.lunch.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
+                        <optgroup label="Cena">{TIME_SLOTS.dinner.map(t => <option key={t} value={t} disabled={availability[t] <= 0}>{t} ({availability[t] ?? 10} posti)</option>)}</optgroup>
+                      </>
+                    )}
+                  </select>
+                </div>
+                <button type="submit" disabled={status === 'loading'} className="w-full bg-amber-600 text-white font-bold py-4 rounded hover:bg-amber-700 transition-all shadow-lg">
+                  {status === 'loading' ? 'Invio...' : 'Conferma Prenotazione'}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Contacts = () => (
+  <div className="py-16 bg-white min-h-screen">
+    <div className="max-w-7xl mx-auto px-4">
+      <div className="text-center mb-16">
+        <h2 className="text-3xl md:text-4xl font-serif font-bold text-stone-800 mb-4">Dove Siamo</h2>
+        <div className="h-1 w-24 bg-amber-500 mx-auto"></div>
+      </div>
+      <div className="grid md:grid-cols-2 gap-12">
+        <div className="space-y-8">
+          <div className="bg-stone-50 p-8 rounded-xl border border-stone-200">
+            <h3 className="text-2xl font-serif font-bold text-stone-800 mb-6 flex items-center"><MapPin className="text-amber-500 mr-2" /> Daniele Gourmet</h3>
+            <p className="text-stone-600 mb-2">Lungomare Trieste, 98</p>
+            <p className="text-stone-600 mb-6">84122, Salerno (SA)</p>
+            <div className="flex items-center text-stone-600 mb-2"><Phone size={18} className="mr-3 text-amber-500"/> 089 123 4567</div>
+            <div className="flex items-center text-stone-600"><Mail size={18} className="mr-3 text-amber-500"/> info@danielegourmet.it</div>
+          </div>
+          <div className="bg-stone-50 p-8 rounded-xl border border-stone-200">
+            <h3 className="text-2xl font-serif font-bold text-stone-800 mb-6 flex items-center"><Clock className="text-amber-500 mr-2" /> Orari</h3>
+            <p className="mb-2"><strong>Lun - Ven:</strong> 12:30 - 15:00 | 19:00 - 23:30</p>
+            <p><strong>Sab - Dom:</strong> 19:00 - 00:30</p>
+          </div>
+        </div>
+        <div className="h-[400px] bg-stone-200 rounded-xl overflow-hidden shadow-lg">
+          <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3023.777678536124!2d14.7667893!3d40.6749987!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x133bc3cf7a8d56b5%3A0x6296720d2769222!2sDaniele%20Gourmet!5e0!3m2!1sit!2sit!4v1700000000000!5m2!1sit!2sit" width="100%" height="100%" style={{border:0}} allowFullScreen="" loading="lazy"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+// --- MAIN APP ---
 
 export default function App() {
   const { route, navigate } = useNavigation();
@@ -1324,4 +1488,4 @@ export default function App() {
        )}
     </div>
   );
-}//aggiornamento 07-12-2025 16:40
+}//aggiornamento 07-12-2025 20:15
