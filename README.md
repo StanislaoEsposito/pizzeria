@@ -1,6 +1,5 @@
 <div align="center">
 
-
   <br><br>
 
   <a href="https://git.io/typing-svg">
@@ -12,6 +11,12 @@
   <h3><i>"Digitalizzare l'esperienza della vera pizza a Salerno"</i> 🍕🍷🇮🇹</h3>
 
   <br>
+
+  <a href="https://pizzeria-jefbibzgw-stanislao-espositos-projects.vercel.app">
+    <img src="https://img.shields.io/badge/🌍_Live_Demo-Visita_il_Sito-2ea44f?style=for-the-badge&logo=vercel" alt="Live Demo" />
+  </a>
+  
+  <br><br>
 
   <img src="https://img.shields.io/badge/React_v18-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" />
   <img src="https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white" />
@@ -29,6 +34,8 @@ Il progetto **Daniele Gourmet** nasce per modernizzare la gestione di una rinoma
 L'obiettivo era duplice: offrire ai clienti un modo rapido per prenotare ed esplorare il menu, e fornire allo staff uno strumento potente per gestire turni e prenotazioni.
 
 L'applicazione è una **Single Page Application (SPA)** moderna: garantisce fluidità e reattività senza i ricaricamenti di pagina tipici dei siti tradizionali, grazie a un routing personalizzato basato sulla History API.
+
+> 🚀 **Provalo subito qui:** [pizzeria-jefbibzgw-stanislao-espositos-projects.vercel.app](https://pizzeria-jefbibzgw-stanislao-espositos-projects.vercel.app)
 
 ---
 
@@ -88,8 +95,8 @@ Il progetto è stato sviluppato localmente su ambiente **Node.js** e versionato 
 
 1.  **Clona la repository:**
     ```bash
-    git clone [https://github.com/TuoUsername/daniele-gourmet.git](https://github.com/TuoUsername/daniele-gourmet.git)
-    cd daniele-gourmet
+    git clone [https://github.com/StanislaoEsposito/pizzeria.git](https://github.com/StanislaoEsposito/pizzeria.git)
+    cd pizzeria
     ```
 
 2.  **Installa le dipendenze:**
@@ -121,9 +128,10 @@ Il progetto è stato sviluppato localmente su ambiente **Node.js** e versionato 
 
   <br><br>
   
-  ![Visitor Badge](https://visitor-badge.laobi.icu/badge?page_id=DanieleGourmet.app)
+  ![Visitor Badge](https://visitor-badge.laobi.icu/badge?page_id=StanislaoEsposito.pizzeria)
   
   <br>
 
+  Made by **Stanislao Esposito**
 
 </div>
